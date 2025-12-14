@@ -1,0 +1,1 @@
+Scaricare il dataset da [link] e inserirlo nella cartella data/
