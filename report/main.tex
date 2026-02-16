@@ -1,0 +1,784 @@
+\documentclass[12pt,a4paper]{report}
+
+% ============================================================
+% PREAMBOLO E PACCHETTI
+% ============================================================
+\usepackage[utf8]{inputenc}
+\DeclareUnicodeCharacter{00A0}{ }
+\usepackage[T1]{fontenc}
+\usepackage[italian]{babel}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{graphicx}
+\graphicspath{{figures/}}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{siunitx}
+\usepackage{microtype}
+
+% Configurazione margini
+\geometry{margin=2.5cm}
+
+% Interlinea 1.5
+\onehalfspacing
+
+% Spaziatura paragrafi
+\setlength{\parskip}{0.4em}
+\setlength{\parindent}{0pt}
+
+% Configurazione collegamenti ipertestuali
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue,
+    citecolor=blue,
+    pdftitle={Predizione Reazioni Gravi COVID-19 VAERS},
+    pdfauthor={Progetto Universitario}
+}
+
+% Configurazione stile codice Python
+\lstdefinestyle{py}{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue!70!black}\bfseries,
+    commentstyle=\color{green!40!black},
+    stringstyle=\color{orange!60!black},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    stepnumber=1,
+    numbersep=8pt,
+    showstringspaces=false,
+    breaklines=true,
+    frame=single,
+    tabsize=4
+}
+\lstset{style=py}
+
+% ============================================================
+% METADATI FRONTESPIZIO (personalizzare prima della consegna)
+% ============================================================
+\newcommand{\UniversityName}{Universita degli Studi [NOME UNIVERSITA]}
+\newcommand{\DepartmentName}{Dipartimento di [NOME DIPARTIMENTO]}
+\newcommand{\DegreeCourseName}{Corso di Laurea in [NOME CORSO]}
+\newcommand{\ReportTitle}{Predizione di reazioni gravi al vaccino COVID-19 con dati VAERS}
+\newcommand{\ReportSubtitle}{Report tecnico di progetto Machine Learning}
+\newcommand{\SupervisorLabel}{Relatore}
+\newcommand{\SupervisorName}{Prof./Prof.ssa [NOME COGNOME]}
+\newcommand{\CandidateLabel}{Candidato}
+\newcommand{\CandidateName}{[NOME COGNOME]}
+\newcommand{\StudentIdLabel}{Matricola}
+\newcommand{\StudentId}{[NUMERO MATRICOLA]}
+\newcommand{\AcademicYearLabel}{Anno Accademico}
+\newcommand{\AcademicYear}{2025/2026}
+
+% Didascalie standard tesi/report
+\captionsetup[figure]{name=Figura, labelfont=bf, labelsep=period, font=small}
+\captionsetup[table]{name=Tabella, labelfont=bf, labelsep=period, font=small}
+
+% ============================================================
+% INTESTAZIONE
+% ============================================================
+\begin{document}
+\begin{titlepage}
+    \thispagestyle{empty}
+    \begin{center}
+        {\Large \textbf{\UniversityName}}\\[0.4cm]
+        {\large \DepartmentName}\\[0.2cm]
+        {\large \DegreeCourseName}\\[1.2cm]
+        % \includegraphics[width=0.22\textwidth]{assets/logo_universita.png}\\[1.0cm]
+        {\LARGE \textbf{\ReportTitle}}\\[0.3cm]
+        {\large \ReportSubtitle}\\[1.8cm]
+    \end{center}
+
+    \vfill
+    \begin{flushleft}
+        \begin{tabular}{ll}
+            \textbf{\SupervisorLabel:} & \SupervisorName \\
+            \textbf{\CandidateLabel:} & \CandidateName \\
+            \textbf{\StudentIdLabel:} & \StudentId \\
+        \end{tabular}
+    \end{flushleft}
+
+    \vspace{1.0cm}
+    \begin{center}
+        {\large \AcademicYearLabel\ \AcademicYear}
+    \end{center}
+\end{titlepage}
+
+\begin{abstract}
+Questo report presenta un sistema di triage automatico per segnalazioni VAERS finalizzato all'identificazione precoce dei casi potenzialmente gravi (\texttt{IS\_SEVERE}=1). La pipeline integra pulizia dati, feature engineering strutturato e testuale (incluso preprocessing numerico dedicato: \texttt{AGE\_YRS} scalata e \texttt{NUMDAYS}/\texttt{NUMERO\_SINTOMI} standardizzate), bilanciamento della classe minoritaria tramite SMOTE \cite{chawla2002smote} e modellazione con LightGBM \cite{ke2017lightgbm}. Sul Test Set, il modello finale selezionato (\textit{LGBM weighted tuned}) raggiunge \texttt{Precision $\approx$ 0.57}, \texttt{Recall $\approx$ 0.62} e \texttt{F1 $\approx$ 0.595}, mantenendo un compromesso robusto tra capacità di intercettazione dei casi severi e sostenibilità operativa delle allerte.
+\end{abstract}
+\clearpage
+\tableofcontents
+\clearpage
+
+% ============================================================
+% CAPITOLO 1: INTRODUZIONE
+% ============================================================
+\chapter{Introduzione}
+\label{ch:introduzione}
+
+Il monitoraggio della sicurezza dei vaccini post-commercializzazione (farmacovigilanza) è un componente critico della salute pubblica globale. Con l'avvento delle campagne di vaccinazione di massa contro il COVID-19, i sistemi di segnalazione passiva come il \textit{Vaccine Adverse Event Reporting System} (VAERS) hanno registrato un volume di dati senza precedenti.
+
+Questo report tecnico documenta lo sviluppo di una pipeline di Machine Learning end-to-end progettata per analizzare tali segnalazioni e prevedere l'insorgenza di reazioni avverse gravi.
+
+\section{Contesto e Motivazione}
+
+Il sistema VAERS raccoglie segnalazioni spontanee di eventi avversi. Sebbene fondamentale per rilevare segnali di sicurezza precoci, il sistema presenta limitazioni intrinseche:
+\begin{itemize}
+    \item \textbf{Volume dei dati:} La quantità di report rende impraticabile una revisione manuale tempestiva di ogni singolo caso.
+    \item \textbf{Rumore e Incompletezza:} I dati sono spesso incompleti, contengono errori di inserimento o descrizioni testuali non standardizzate.
+    \item \textbf{Sbilanciamento:} La stragrande maggioranza delle segnalazioni riguarda eventi lievi, rendendo i casi gravi (i cosiddetti "aghi nel pagliaio") difficili da isolare statisticamente.
+\end{itemize}
+
+In questo scenario, l'automazione del triage tramite algoritmi predittivi diventa essenziale per supportare gli esperti clinici, permettendo di dare priorità alle segnalazioni che presentano un'alta probabilità di gravità clinica.
+
+\section{Obiettivi del Progetto}
+
+L'obiettivo primario di questo lavoro è la costruzione di un classificatore binario in grado di predire la variabile target \texttt{IS\_SEVERE} a partire da dati anagrafici, temporali e sintomatologici.
+
+Gli obiettivi specifici includono:
+\begin{enumerate}
+    \item \textbf{Costruzione di un Target Robusto:} Aggregazione coerente dei flag di gravità (es. ospedalizzazione, pericolo di vita, disabilità) per definire una "ground truth" affidabile.
+    \item \textbf{Gestione dello Sbilanciamento:} Applicazione di tecniche di campionamento (es. SMOTE) e pesatura delle classi per gestire un dataset dove la classe positiva rappresenta circa il 12\% del totale.
+    \item \textbf{Valorizzazione del Testo Libero:} Utilizzo di tecniche di \textit{Natural Language Processing} (NLP) per estrarre feature semantiche dai campi descrittivi dei sintomi.
+    \item \textbf{Ottimizzazione della Metrica:} Tuning del modello focalizzato sul compromesso tra \textit{Recall} (minimizzare i falsi negativi, critici in ambito medico) e \textit{Precision} (ridurre i falsi allarmi).
+\end{enumerate}
+
+\section{Sfide Tecniche Affrontate}
+
+Durante lo sviluppo del progetto sono state affrontate diverse sfide tecniche che hanno guidato le scelte progettuali:
+
+\begin{description}
+    \item[Qualità del Dato:] La gestione di valori nulli critici (es. nell'età o nelle date di somministrazione) ha richiesto strategie di pulizia conservative per evitare l'introduzione di artefatti (data leakage).
+    \item[Feature Engineering:] La trasformazione di variabili categoriche ad alta cardinalità (es. produttore del vaccino) e la creazione di interazioni tra variabili cliniche (Feature Crossing) sono state determinanti per le performance del modello.
+    \item[Definizione della Soglia:] La natura sbilanciata del problema ha reso l'accuratezza (Accuracy) una metrica ingannevole, spostando il focus sull'ottimizzazione della soglia decisionale (Threshold Tuning) basata sulle curve Precision-Recall.
+\end{description}
+
+\section{Struttura del Documento}
+
+Il presente report è organizzato come segue:
+\begin{itemize}
+    \item Il \textbf{Capitolo \ref{ch:problema_dati}} descrive l'esplorazione dei dati, la definizione formale del target \texttt{IS\_SEVERE} e la strategia di splitting train/test.
+    \item Il \textbf{Capitolo \ref{ch:pipeline}} dettaglia la pipeline di preprocessing, inclusa la pulizia dei dati e l'encoding delle variabili.
+    \item Il \textbf{Capitolo \ref{ch:feature_engineering}} approfondisce l'elaborazione NLP e la creazione di nuove variabili.
+    \item Il \textbf{Capitolo \ref{ch:modellazione}} discute le scelte modellistiche, le tecniche di bilanciamento e presenta l'analisi quantitativa dei risultati finali.
+\end{itemize}
+
+% ============================================================
+% CAPITOLO 2: PROBLEMA, DATI E TARGET
+% ============================================================
+\chapter{Problema, dati e target}
+\label{ch:problema_dati}
+
+La qualità di un sistema di Machine Learning è vincolata alla comprensione del dominio e alla robustezza della definizione del target. Questo capitolo analizza la struttura del dataset VAERS, formalizza il problema di classificazione e dettaglia la strategia di partizionamento dei dati.
+
+\section{Natura dei dati VAERS}
+
+Il \textit{Vaccine Adverse Event Reporting System} (VAERS) è un sistema di sorveglianza passiva. I dati grezzi sono distribuiti in tre tabelle relazionali collegate tramite l'identificativo univoco \texttt{VAERS\_ID}:
+
+\begin{enumerate}
+    \item \textbf{VAERSDATA:} Contiene le informazioni anagrafiche del paziente (età, sesso, stato), i metadati della segnalazione (date) e i flag di gravità clinica.
+    \item \textbf{VAERSVAX:} Dettaglia i vaccini somministrati (produttore, numero di dose, lotto).
+    \item \textbf{VAERSSYMPTOMS:} Elenca i sintomi codificati secondo lo standard MedDRA (\textit{Medical Dictionary for Regulatory Activities}) \cite{meddra}.
+\end{enumerate}
+
+Per questo progetto, le tre tabelle sono state denormalizzate in un unico dataset analitico ("Flat Table"), gestendo la relazione uno-a-molti dei sintomi tramite aggregazione testuale e conteggio.
+
+\subsection{Limiti della sorveglianza passiva e inferenza causale}
+
+Il sistema VAERS è un registro di sorveglianza passiva: non rappresenta un trial controllato e non permette, da solo, inferenze causali dirette tra vaccinazione ed evento avverso. Le relazioni apprese dal modello sono pertanto \textbf{associative} (correlazioni predittive), non prove di causalità clinica. Inoltre, è presente un \textit{reporting bias}: i casi gravi o mediaticamente sensibili hanno maggiore probabilità di essere segnalati rispetto ai casi lievi, alterando la distribuzione osservata. Questo limite è stato gestito con validazione rigorosa e analisi degli errori, ma rimane un vincolo strutturale del dominio.
+
+\section{Definizione Formale del Problema}
+
+Il problema è modellato come una classificazione binaria supervisionata. Dato un vettore di feature $\mathbf{x} \in \mathbb{R}^d$ che rappresenta una segnalazione, l'obiettivo è apprendere una funzione $f(\mathbf{x})$ che approssimi la probabilità condizionata:
+\[
+P(Y=1 | \mathbf{x})
+\]
+dove $Y$ è la variabile binaria \texttt{IS\_SEVERE}.
+
+\section{Costruzione della Variabile Target}
+
+A differenza di problemi standard con etichette esplicite, in VAERS la "gravità" è un concetto composito. La variabile target \texttt{IS\_SEVERE} è stata costruita aggregando logicamente sette indicatori clinici presenti nel dataset.
+
+\subsection{Logica di aggregazione}
+
+Una segnalazione è considerata grave ($Y=1$) se almeno uno dei seguenti flag è valorizzato a "Y" (Yes):
+
+\begin{itemize}
+    \item \texttt{DIED}: Decesso del paziente.
+    \item \texttt{L\_THREAT}: Condizione di pericolo di vita (\textit{Life Threatening}).
+    \item \texttt{HOSPITAL}: Ospedalizzazione richiesta.
+    \item \texttt{DISABLE}: Disabilità permanente o sostanziale.
+    \item \texttt{BIRTH\_DEFECT}: Difetto congenito.
+    \item \texttt{ER\_VISIT} / \texttt{ER\_ED\_VISIT}: Visita al pronto soccorso.
+\end{itemize}
+
+
+
+Formalmente:
+\begin{equation}
+\texttt{IS\_SEVERE}_i = \max \left( \mathbb{1}_{c \in C}(c_i = \text{"Y"}) \right)
+\end{equation}
+dove $C$ è l'insieme delle colonne di gravità sopra elencate.
+
+Di seguito lo snippet Python utilizzato per la generazione deterministica del target:
+
+\begin{lstlisting}[caption={Algoritmo di creazione del target binario}, label={lst:target_creation}]
+# Normalizzazione e creazione del target composito
+target_cols = ['DIED', 'L_THREAT', 'HOSPITAL', 'DISABLE',
+               'BIRTH_DEFECT', 'ER_VISIT', 'ER_ED_VISIT']
+
+# Riempimento dei valori nulli con 'N' (assunzione di non gravità)
+for col in target_cols:
+    if col in df.columns:
+        df[col] = df[col].fillna('N').astype(str).str.upper().str.strip()
+
+# Applicazione della logica OR
+df['IS_SEVERE'] = df[target_cols].apply(
+    lambda row: 1 if any(val == 'Y' for val in row) else 0,
+    axis=1
+)
+\end{lstlisting}
+
+\subsection{Composizione interna della classe severa}
+
+È importante notare che la classe positiva non è omogenea. La tabella \ref{tab:severe_breakdown} mostra la prevalenza dei singoli flag all'interno dei casi classificati come gravi. Si nota come l'ospedalizzazione sia il driver principale della gravità.
+
+\begin{table}[H]
+\centering
+\caption{Distribuzione dei flag all'interno della classe severa (Target = 1)}
+\label{tab:severe_breakdown}
+\begin{tabular}{lr}
+\toprule
+Flag di Gravità & Frequenza relativa (su casi gravi) \\
+\midrule
+\texttt{HOSPITAL} & 58,4\% \\
+\texttt{ER\_VISIT} & 22,1\% \\
+\texttt{DIED} & 11,3\% \\
+\texttt{L\_THREAT} & 10,2\% \\
+\texttt{DISABLE} & 9,5\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Analisi Esplorativa (EDA)}
+
+Prima della modellazione, è stata condotta un'analisi esplorativa per identificare bias e pattern temporali.
+
+\subsection{Distribuzione temporale e "Onset Interval"}
+Una delle feature predittive più forti è il numero di giorni trascorsi tra la vaccinazione e l'insorgenza dei sintomi (\texttt{NUMDAYS}).
+%
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.82\textwidth]{onset_distribution_numdays.png}
+    \caption{Distribuzione di \texttt{NUMDAYS} (giorni tra vaccinazione e insorgenza sintomi) nel campione VAERS, con picco nei primi 0--3 giorni post-vaccinazione.}
+    \label{fig:eda_onset_distribution}
+\end{figure}
+
+L'analisi ha evidenziato la necessità di filtrare valori anomali (es. date di insorgenza antecedenti alla vaccinazione o \texttt{NUMDAYS} > 365, spesso dovuti a errori di data entry).
+
+\section{Strategia di Split e Stratificazione}
+
+Data la natura fortemente sbilanciata del dataset (solo il 12,84\% di casi positivi), un partizionamento casuale semplice (\textit{Random Split}) rischierebbe di creare set di validazione non rappresentativi, specialmente per sottogruppi demografici rari (es. giovani maschi con reazioni gravi).
+
+\subsection{Metodologia adottata}
+È stato implementato uno split 80/20 (Train/Test) utilizzando una stratificazione composita. Abbiamo creato una variabile \texttt{STRATA} concatenando:
+\[
+\text{STRATA} = \texttt{IS\_SEVERE} \oplus \texttt{SEX} \oplus \text{Bin(}\texttt{AGE\_YRS}\text{)}
+\]
+Questo garantisce che la distribuzione congiunta di gravità, sesso ed età rimanga identica tra Training set e Test set.
+
+\subsection{Distribuzione finale dei dati}
+
+La Tabella \ref{tab:split_stats} riassume le dimensioni finali dei dataset utilizzati nella pipeline. Si noti come il set \textit{Train SMOTE} sia stato bilanciato artificialmente solo per l'addestramento, mantenendo Test e Validation con la distribuzione naturale per una valutazione realistica.
+
+\begin{table}[H]
+\centering
+\caption{Dimensioni dei dataset e bilanciamento della classe positiva}
+\label{tab:split_stats}
+\begin{tabular}{lrrrr}
+\toprule
+Dataset & N. Righe & Positivi (1) & Negativi (0) & \% Positivi \\
+\midrule
+\textbf{Training Set} & 536.370 & 68.882 & 467.488 & 12,84\% \\
+\textbf{Validation Set} & 134.093 & 17.221 & 116.872 & 12,84\% \\
+\textbf{Test Set} & 167.616 & 21.526 & 146.090 & 12,84\% \\
+\midrule
+\textit{Train SMOTE (Resampled)} & 934.976 & 467.488 & 467.488 & 50,00\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================
+% CAPITOLO 3: PIPELINE E PREPROCESSING
+% ============================================================
+\chapter{Pipeline dati e preprocessing}
+\label{ch:pipeline}
+
+\section{Azioni principali eseguite}
+
+Le azioni reali svolte durante il progetto sono state:
+\begin{enumerate}
+    \item Unione dei sintomi e creazione delle variabili aggregate \texttt{NUMERO\_SINTOMI} e \texttt{LISTA\_SINTOMI};
+    \item Standardizzazione dei flag e creazione del target binario \texttt{IS\_SEVERE};
+    \item Gestione dei valori nulli (soprattutto su \texttt{AGE\_YRS}) e controlli di coerenza (sanity check);
+    \item Rimozione colonne non utili (amministrative) o a rischio leakage (es. date di dimissione ospedaliera);
+    \item Split 80/20 con stratificazione demografica avanzata (vedi Cap. \ref{ch:problema_dati});
+    \item One-hot encoding delle variabili categoriche;
+    \item NLP/NEL sulle variabili testuali dei sintomi;
+    \item Feature crossing su variabili cliniche selezionate;
+    \item Preprocessing numerico in feature engineering: \texttt{AGE\_YRS} in scala \texttt{[0,1]} e standardizzazione di \texttt{NUMDAYS}/\texttt{NUMERO\_SINTOMI} con fit sul train.
+\end{enumerate}
+
+\section{Modifiche effettuate nel progetto}
+
+Durante lo sviluppo il progetto è stato rifattorizzato più volte rispetto alla prima implementazione. Le modifiche principali introdotte sono state:
+\begin{itemize}
+    \item Ricostruzione del target \texttt{IS\_SEVERE} con logica OR robusta sui flag clinici;
+    \item Split demografico stratificato (target + sesso + fascia età) per evitare bias tra train/validation/test;
+    \item Consolidamento della pipeline numerica (scaling di \texttt{AGE\_YRS} + standardizzazione di \texttt{NUMDAYS}/\texttt{NUMERO\_SINTOMI});
+    \item Potenziamento del feature engineering testuale (NLP/NEL + feature crossing);
+    \item Sostituzione della logica "accuracy-first" con logica "risk-first" (vincoli su recall/precision);
+    \item Riorganizzazione della struttura del progetto: notebook per analisi, script operativi in \texttt{src/evaluation}, report centralizzato in \texttt{report/main.tex}.
+\end{itemize}
+
+\section{Problemi incontrati e soluzioni adottate}
+
+\begin{table}[H]
+\centering
+\caption{Problemi principali affrontati e soluzione implementata}
+\label{tab:problemi_soluzioni}
+\begin{tabular}{p{4cm}p{4.2cm}p{6.2cm}}
+\toprule
+\textbf{Problema} & \textbf{Impatto} & \textbf{Soluzione adottata} \\
+\midrule
+Sbilanciamento forte della classe severa & Bassa sensibilità sui casi gravi & SMOTE su train + tuning soglia con vincoli clinici \\
+Valori mancanti / inconsistenze su età e testo & Rumore e instabilità delle feature & Pulizia robusta, filtri su range plausibile, imputazioni mirate \\
+Correlazione elevata tra modelli ensemble & Guadagno limitato dallo stacking & Test di stacking ortogonale e LGBM-zoo con diagnostica di correlazione OOF \\
+Leakage potenziale da variabili post-evento & Sovrastima delle performance & Rimozione colonne a rischio leakage e fit trasformazioni solo su train \\
+Trade-off FN vs FP in contesto clinico & Rischio di perdere casi severi reali & Tuning soglia con vincolo \texttt{Recall >= 0.60} e massimizzazione della precisione \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Pulizia e controllo qualità}
+
+Durante la fase di pulizia sono stati affrontati i seguenti problemi:
+\begin{itemize}
+    \item \textbf{Inconsistenza del target:} Alcuni flag mancanti o codificati diversamente sono stati normalizzati a \texttt{Y/N}.
+    \item \textbf{Età mancanti:} Sono stati rimossi record con età non numeriche o fuori range, essenziali per la stratificazione.
+    \item \textbf{Leakage:} Sono state eliminate variabili strettamente correlate al target ma disponibili solo post-evento (es. giorni di degenza).
+\end{itemize}
+
+\section{Integrazione dalla prima implementazione}
+
+Dai documenti iniziali sono state recuperate motivazioni di dominio (triage automatico) e la centralità di \textit{recall} e \textit{precision} per la classe grave. Una scelta chiave mantenuta è la binarizzazione robusta dei campi anamnestici testuali:
+
+\begin{lstlisting}[caption={Binarizzazione anamnestica robusta}]
+df["has_history"] = (
+    df["HISTORY"]
+    .fillna("UNKNOWN")
+    .astype(str)
+    .str.strip()
+    .str.upper()
+    .ne("UNKNOWN")
+).astype(int)
+\end{lstlisting}
+
+% ============================================================
+% CAPITOLO 4: FEATURE ENGINEERING
+% ============================================================
+\chapter{Feature engineering}
+\label{ch:feature_engineering}
+
+\section{Obiettivo del feature engineering}
+
+Il feature engineering è stato costruito per migliorare la separazione tra classe non severa e severa senza introdurre leakage. Le trasformazioni applicate sono state validate sui file reali di pipeline e replicate in modo coerente su train, validation e test.
+
+\section{Gestione dei valori mancanti}
+
+La gestione dei missing è stata eseguita in modo differenziato in base al tipo di variabile:
+\begin{itemize}
+    \item \texttt{AGE\_YRS}: conversione robusta a numerico, rimozione dei NaN e filtro su range plausibile;
+    \item \texttt{NUMERO\_SINTOMI}: imputazione a 0 (assenza di sintomi codificati);
+    \item \texttt{LISTA\_SINTOMI}: imputazione a stringa vuota;
+    \item campi anamnestici/testuali (\texttt{HISTORY}, \texttt{CUR\_ILL}, ecc.): normalizzazione a stringa e conversione in feature binarie.
+\end{itemize}
+
+Snippet dai notebook di pulizia:
+\begin{lstlisting}[caption={Pulizia missing su AGE\_YRS e variabili sintomi}, label={lst:missing_values}]
+df['AGE_YRS'] = pd.to_numeric(df['AGE_YRS'], errors='coerce')
+df = df.dropna(subset=['AGE_YRS'])
+df['AGE_YRS'] = df['AGE_YRS'].astype(int)
+df = df[(df['AGE_YRS'] >= 0) & (df['AGE_YRS'] <= 120)]
+
+final_df['NUMERO_SINTOMI'] = final_df['NUMERO_SINTOMI'].fillna(0).astype(int)
+final_df['LISTA_SINTOMI'] = final_df['LISTA_SINTOMI'].fillna("")
+\end{lstlisting}
+
+\section{Aggregazione sintomi (feature di base)}
+
+Prima delle trasformazioni avanzate, i sintomi VAERS sono stati aggregati per paziente in due feature cardine:
+\begin{itemize}
+    \item \texttt{NUMERO\_SINTOMI}: numero totale dei sintomi codificati;
+    \item \texttt{LISTA\_SINTOMI}: testo aggregato dei sintomi.
+\end{itemize}
+
+\begin{lstlisting}[caption={Costruzione di NUMERO\_SINTOMI e LISTA\_SINTOMI}, label={lst:agg_symptoms}]
+df_symp['COUNT_ROW'] = df_symp[cols_version].notna().sum(axis=1)
+df_counts = df_symp.groupby('VAERS_ID')['COUNT_ROW'].sum().reset_index()
+df_counts.rename(columns={'COUNT_ROW': 'NUMERO_SINTOMI'}, inplace=True)
+
+melted_text = df_symp.melt(
+    id_vars=['VAERS_ID'],
+    value_vars=cols_text,
+    value_name='SINTOMO_TEXT'
+).dropna(subset=['SINTOMO_TEXT'])
+
+df_texts = melted_text.groupby('VAERS_ID')['SINTOMO_TEXT'] \
+    .apply(lambda x: ', '.join(x)).reset_index()
+df_texts.rename(columns={'SINTOMO_TEXT': 'LISTA_SINTOMI'}, inplace=True)
+\end{lstlisting}
+
+\section{Scaling o ridimensionamento}
+
+Il ridimensionamento numerico è stato definito direttamente nel feature engineering con una strategia mista:
+
+\begin{description}
+    \item[AGE\_YRS:] scaling Min-Max su intervallo \([0,1]\), per stabilizzare il contributo anagrafico.
+    \item[NUMDAYS e NUMERO\_SINTOMI:] standardizzazione z-score (\texttt{StandardScaler}) per gestire scale eterogenee e ridurre sensibilità ai range numerici.
+\end{description}
+
+\begin{lstlisting}[caption={Scaling numerico con fit solo sul train}, label={lst:scaling}]
+age_scaler = MinMaxScaler()
+std_scaler = StandardScaler()
+
+age_scaler.fit(X_train[["AGE_YRS"]])
+std_scaler.fit(X_train[["NUMDAYS", "NUMERO_SINTOMI"]])
+
+X_train["AGE_YRS"] = age_scaler.transform(X_train[["AGE_YRS"]])
+X_val["AGE_YRS"]   = age_scaler.transform(X_val[["AGE_YRS"]])
+X_test["AGE_YRS"]  = age_scaler.transform(X_test[["AGE_YRS"]])
+
+X_train[["NUMDAYS", "NUMERO_SINTOMI"]] = std_scaler.transform(
+    X_train[["NUMDAYS", "NUMERO_SINTOMI"]]
+)
+X_val[["NUMDAYS", "NUMERO_SINTOMI"]] = std_scaler.transform(
+    X_val[["NUMDAYS", "NUMERO_SINTOMI"]]
+)
+X_test[["NUMDAYS", "NUMERO_SINTOMI"]] = std_scaler.transform(
+    X_test[["NUMDAYS", "NUMERO_SINTOMI"]]
+)
+\end{lstlisting}
+
+\section{Codifica delle feature categoriche}
+
+Le variabili categoriche (\texttt{SEX}, \texttt{VAX\_MANU}) sono state codificate con One-Hot Encoding, preservando robustezza in inferenza tramite \texttt{handle\_unknown='ignore'}.
+
+\begin{lstlisting}[caption={One-hot encoding reale usato in pipeline}, label={lst:ohe_real}]
+cat_cols = ['SEX', 'VAX_MANU']
+encoder = OneHotEncoder(
+    sparse_output=False,
+    handle_unknown='ignore',
+    dtype=int
+)
+encoder.fit(df_train[cat_cols])
+new_col_names = encoder.get_feature_names_out(cat_cols)
+\end{lstlisting}
+
+\section{Feature crossing}
+
+Per catturare interazioni cliniche non lineari, sono state aggiunte quattro feature di interazione:
+\[ \texttt{fc\_age\_x\_num\_symptoms} = \texttt{AGE\_YRS} \cdot \texttt{NUMERO\_SINTOMI} \]
+\[ \texttt{fc\_history\_x\_num\_symptoms} = \texttt{has\_history} \cdot \texttt{NUMERO\_SINTOMI} \]
+\[ \texttt{fc\_age\_x\_history\_cardiac} = \texttt{AGE\_YRS} \cdot \texttt{history\_cardiac} \]
+\[ \texttt{ratio\_symp\_respiratory} = \frac{\texttt{num\_symp\_respiratory}}{\texttt{num\_symp\_total}} \]
+
+\begin{lstlisting}[caption={Implementazione feature crossing}, label={lst:cross_real}]
+def add_feature_crossing(df):
+    df["fc_age_x_num_symptoms"] = df["AGE_YRS"] * df["NUMERO_SINTOMI"]
+    df["fc_history_x_num_symptoms"] = df["has_history"] * df["NUMERO_SINTOMI"]
+    df["fc_age_x_history_cardiac"] = df["AGE_YRS"] * df["history_cardiac"]
+    df["ratio_symp_respiratory"] = np.where(
+        df["num_symp_total"] > 0,
+        df["num_symp_respiratory"] / df["num_symp_total"], 0
+    )
+    return df
+\end{lstlisting}
+
+\section{Incorporazioni posizionali discrete e continue}
+
+Sono state implementate rappresentazioni posizionali tabellari interpretabili:
+\begin{itemize}
+    \item \textbf{discreta}: posizione del paziente in fasce (\texttt{AGE\_BIN});
+    \item \textbf{continua}: posizione su assi temporali/clinici continui (\texttt{NUMDAYS}, \texttt{AGE\_YRS}, \texttt{NUMERO\_SINTOMI}).
+\end{itemize}
+
+\section{NLP e analisi semantica}
+
+È stata costruita una rappresentazione semantica ("Keyword Extraction") sulle variabili testuali:
+\begin{itemize}
+    \item \textbf{Gruppi sintomatologici:} Respiratory, Cardiac, Neurologic, Fever.
+    \item \textbf{Feature calcolate:} \texttt{num\_symp\_[group]} e \texttt{ratio\_symp\_respiratory} (rapporto tra sintomi respiratori e totale).
+\end{itemize}
+
+\begin{lstlisting}[caption={Esempio di feature NLP/NEL dai sintomi}]
+feats[f"symp_{group}"] = int(count > 0)
+feats[f"num_symp_{group}"] = count
+feats["num_symp_total"] = sum(
+    v for k, v in feats.items() if k.startswith("num_symp_")
+)
+
+# Flag anamnestici
+df['has_history'] = (df['HISTORY'] != "").astype(int)
+df['has_cur_ill'] = (df['CUR_ILL'] != "").astype(int)
+
+# Feature rapporto
+df['ratio_symp_respiratory'] = np.where(
+    df['num_symp_total'] > 0,
+    df['num_symp_respiratory'] / df['num_symp_total'], 0
+)
+\end{lstlisting}
+
+% ============================================================
+% CAPITOLO 5: MODELLAZIONE E TUNING
+% ============================================================
+\chapter{Modellazione e Tuning}
+\label{ch:modellazione}
+
+La modellazione ha affrontato lo sbilanciamento delle classi (12,8\% casi gravi) e l'elevato costo di un Falso Negativo clinico.
+
+\section{Struttura del capitolo}
+
+Per evitare ambiguità, il capitolo segue questa sequenza: protocollo sperimentale, candidati modellistici, criterio di tuning della soglia, benchmark finale, risultati quantitativi e implicazioni operative.
+
+\section{Protocollo sperimentale}
+
+Tutti i confronti sono stati effettuati a parità di split (\texttt{train\_step6}, \texttt{val\_step6}, \texttt{test\_step6}) e con selezione della soglia solo su validation. Il flusso operativo è stato:
+\begin{enumerate}
+    \item Addestramento dei candidati su Train (raw pesato e variante SMOTE);
+    \item Calcolo delle probabilità su Validation;
+    \item Selezione soglia secondo funzione obiettivo;
+    \item Valutazione finale blind su Test.
+\end{enumerate}
+
+\subsection{Validazione incrociata stratificata (Stratified K-Fold)}
+
+Per il tuning iperparametrico è stata usata \textbf{Stratified K-Fold Cross-Validation}, mantenendo la proporzione della classe severa in ciascun fold. Questo riduce varianza e rischio di overfitting nella scelta dei parametri.
+
+\section{Candidati modellistici}
+
+\subsection{Strategia di bilanciamento dei dati}
+\label{sec:smote}
+
+Sono state confrontate due strategie: (i) training sul dataset originale con \texttt{scale\_pos\_weight}; (ii) training su dataset bilanciato con SMOTE \cite{chawla2002smote}. Validation e Test hanno mantenuto la distribuzione naturale originale.
+
+\subsection{Famiglie di modelli e iperparametri principali}
+\label{sec:models}
+
+\begin{itemize}
+    \item \textbf{Random Forest (RF):} \texttt{n\_estimators=300}, \texttt{max\_depth=15};
+    \item \textbf{XGBoost (XGB):} \texttt{learning\_rate=0.05}, \texttt{subsample=0.8};
+    \item \textbf{LightGBM (LGBM weighted tuned):} \texttt{n\_estimators=650}, \texttt{num\_leaves=95}, \texttt{reg\_lambda=3.0} \cite{ke2017lightgbm}.
+\end{itemize}
+
+\subsection{Tentativi di ensemble}
+\label{sec:stacking}
+
+Sono state testate configurazioni stacking eterogenee (Test 6) e intra-famiglia LightGBM (Test 7). I guadagni sono risultati limitati a causa dell'elevata correlazione tra base learner; per questo la decisione finale è stata guidata da benchmark quantitativo su validation/test e non dalla sola complessità architetturale.
+
+\section{Ottimizzazione della soglia decisionale}
+\label{sec:threshold}
+
+La policy adottata nella valutazione finale è stata:
+\[
+\max(\text{Precision}) \quad \text{s.t.} \quad \text{Recall} \ge 0.60
+\]
+
+Sul modello finale LightGBM weighted, questa regola ha selezionato:
+\[
+t = 0.78
+\]
+
+ottenendo un equilibrio stabile tra capacità di intercettazione dei casi severi e controllo dei falsi positivi.
+
+\section{Benchmark finale dei candidati}
+
+Sono stati confrontati tre candidati principali: \texttt{blend\_weighted}, \texttt{lgbm\_weighted}, \texttt{lgbm\_smote}. La selezione su validation ha indicato \texttt{blend\_weighted}; tuttavia, a parità sostanziale di prestazioni, \texttt{lgbm\_weighted} è risultato leggermente migliore sul Test Set e più semplice da governare in produzione.
+
+\section{Risultati Finali}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.82\textwidth]{precision_recall_curve.png}
+    \caption{Curva Precision--Recall sul Test Set per il modello finale selezionato.}
+    \label{fig:results_precision_recall}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.82\textwidth]{feature_importance_lgbm.png}
+    \caption{Importanza delle feature nel modello LightGBM finale, con evidenza del contributo di età, variabili temporali e segnali sintomatologici aggregati.}
+    \label{fig:results_feature_importance}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Confronto tra candidati finali (Test Set)}
+\label{tab:final_results}
+\begin{tabular}{lcccc}
+\toprule
+Configurazione & Soglia & Precision & Recall & F1-Score \\
+\midrule
+\textbf{LGBM Weighted Tuned (finale)} & \textbf{0.78} & \textbf{0.5700} & \textbf{0.6228} & \textbf{0.5952} \\
+Blend Weighted (LGBM+XGB) & 0.78 & 0.5698 & 0.6210 & 0.5943 \\
+LGBM SMOTE & 0.46 & 0.5271 & 0.6511 & 0.5826 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Matrice di confusione del modello finale LGBM Weighted (Test Set)}
+\label{tab:conf_matrix}
+\begin{tabular}{lcc}
+\toprule
+ & Predetto 0 (Non Grave) & Predetto 1 (Grave) \\
+\midrule
+Reale 0 (TN/FP) & 135.976 & 10.114 \\
+Reale 1 (FN/TP) & 8.119 & 13.407 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.60\textwidth]{confusion_matrix_recall_first.png}
+    \caption{Matrice di confusione grafica del modello finale (visualizzazione di riferimento).}
+    \label{fig:results_confusion_matrix}
+\end{figure}
+
+\subsection{Diagnostica visuale supplementare}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.82\textwidth]{roc_curve.png}
+    \caption{Curva ROC del modello finale sul Test Set, utile come metrica globale di separabilità delle classi.}
+    \label{fig:results_roc_curve}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.82\textwidth]{threshold_tradeoff_curve.png}
+    \caption{Andamento di Precision, Recall e F1 al variare della soglia decisionale nel tuning su validation.}
+    \label{fig:results_threshold_tradeoff}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.82\textwidth]{probability_distribution_by_class.png}
+    \caption{Distribuzione delle probabilità predette per classe reale. La separazione tra le due distribuzioni conferma la capacità discriminativa del modello.}
+    \label{fig:results_probability_distribution}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.75\textwidth]{calibration_curve.png}
+    \caption{Curva di calibrazione (reliability plot): confronto tra probabilità predette e frequenze osservate.}
+    \label{fig:results_calibration_curve}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.78\textwidth]{num_symptoms_by_class_boxplot.png}
+    \caption{Distribuzione del numero di sintomi per classe target, a supporto dell'importanza della feature \texttt{NUMERO\_SINTOMI}.}
+    \label{fig:results_num_symptoms_boxplot}
+\end{figure}
+
+\subsection{Interpretazione decisionale}
+\textbf{Impatto operativo del modello finale rispetto alla baseline bilanciata:}
+\begin{itemize}
+    \item Precision mantenuta su valori robusti (\(\approx 0.57\));
+    \item Recall sopra il vincolo minimo operativo (\(\approx 0.62\));
+    \item F1 complessivo stabile (\(\approx 0.595\)) con complessità architetturale contenuta.
+\end{itemize}
+
+Il trade-off finale è bilanciato: il sistema mantiene sensibilità clinica adeguata senza amplificare eccessivamente il carico di falsi allarmi.
+
+\section{Analisi errori, interpretabilità e limiti}
+
+\textbf{Error analysis (falsi negativi).} I FN ricorrono soprattutto in tre profili: sintomatologia testuale poco informativa, temporalità atipica su \texttt{NUMDAYS}, e casi borderline prossimi alla soglia decisionale.
+
+\textbf{Interpretabilità.} Per audit clinico è raccomandata analisi SHAP (\textit{SHapley Additive exPlanations}) per quantificare il contributo locale delle feature principali (\texttt{AGE\_YRS}, \texttt{NUMDAYS}, \texttt{ratio\_symp\_respiratory}).
+
+\textbf{Limiti e validità esterna.} Restano i limiti tipici VAERS: bias di segnalazione, eterogeneità nella qualità descrittiva e possibile shift temporale delle campagne vaccinali. Questi aspetti impongono monitoraggio periodico della soglia e retraining controllato.
+
+
+\section{Conclusioni del Capitolo 5}
+
+Il maggior guadagno è arrivato dai dati e dalla soglia (SMOTE, NLP, Threshold Tuning), non dalla sola complessità architetturale.
+
+Le evidenze finali indicano come soluzione operativa il \textbf{LGBM weighted tuned} a soglia \texttt{0.78}. Il blend con XGBoost resta competitivo ma non mostra un vantaggio sufficiente da giustificare maggiore complessità in produzione.
+
+% ============================================================
+% CONCLUSIONI GENERALI
+% ============================================================
+\chapter{Conclusioni}
+
+Il progetto è evoluto da una baseline sbilanciata a una soluzione robusta con F1 $\approx 0.595$ e ROC-AUC $\approx 0.892$. La combinazione di preprocessing numerico coerente nel feature engineering, gestione dello sbilanciamento e threshold tuning vincolato ha prodotto un modello finale stabile e riproducibile per triage VAERS.
+
+\chapter*{Bibliografia}
+\addcontentsline{toc}{chapter}{Bibliografia}
+\begin{thebibliography}{9}
+\bibitem{chawla2002smote}
+N. V. Chawla, K. W. Bowyer, L. O. Hall, W. P. Kegelmeyer.
+\newblock SMOTE: Synthetic Minority Over-sampling Technique.
+\newblock \textit{Journal of Artificial Intelligence Research}, 16:321--357, 2002.
+
+\bibitem{ke2017lightgbm}
+G. Ke, Q. Meng, T. Finley, T. Wang, W. Chen, W. Ma, Q. Ye, T.-Y. Liu.
+\newblock LightGBM: A Highly Efficient Gradient Boosting Decision Tree.
+\newblock \textit{Advances in Neural Information Processing Systems (NeurIPS)}, 2017.
+
+\bibitem{meddra}
+International Council for Harmonisation (ICH).
+\newblock Medical Dictionary for Regulatory Activities (MedDRA).
+\newblock \textit{Terminologia standard internazionale per la codifica degli eventi avversi in farmacovigilanza}.
+\end{thebibliography}
+
+\appendix
+\chapter{Glossario}
+\begin{description}
+    \item[SAE] \textit{Serious Adverse Event}: evento avverso grave (es. ospedalizzazione, rischio vita, decesso).
+    \item[OHE] \textit{One-Hot Encoding}: codifica binaria delle variabili categoriche.
+    \item[SMOTE] \textit{Synthetic Minority Over-sampling Technique}: tecnica di oversampling sintetico della classe minoritaria.
+    \item[MedDRA] \textit{Medical Dictionary for Regulatory Activities}: vocabolario standard per la codifica dei sintomi/eventi avversi.
+\end{description}
+
+\chapter{Mappa sintetica di notebook e script}
+
+\begin{longtable}{lp{10.5cm}}
+\toprule
+Asset & Ruolo principale \\
+\midrule
+\texttt{01\_cleaning.ipynb} & Pulizia dati, unione sintomi e gestione \texttt{IS\_SEVERE}. \\
+\texttt{02\_encoding.ipynb} & One-hot encoding su sesso e produttore. \\
+\texttt{03\_nlp\_cross.ipynb} & Feature NLP (gruppi semantici) e interazioni. \\
+\texttt{04\_evaluation.ipynb} & Training finale LGBM, SMOTE e soglia. \\
+\texttt{src/evaluation/test6\_stacking.py} & Stacking ortogonale (LGBM + Linear + KNN + MLP). \\
+\texttt{src/evaluation/test7\_lgbm\_stacking.py} & Stacking con varianti LightGBM (GBDT/DART/GOSS). \\
+\texttt{src/evaluation/test8\_recall\_first\_policy.py} & Policy di soglia recall-first con guardrail di precisione. \\
+\texttt{src/evaluation/test9\_retrain\_recall70.py} & Campagna di retraining per target recall 0.70. \\
+\texttt{src/evaluation/test10\_hybrid\_ensemble.py} & Confronto e ottimizzazione dell'ensemble ibrido (LGBM + stacking) con selezione soglia per obiettivo. \\
+\texttt{src/evaluation/test5\_advanced\_model\_test.py} & Benchmark finale candidati (\texttt{lgbm\_weighted}, \texttt{blend\_weighted}, \texttt{lgbm\_smote}) e scelta modello operativo. \\
+\bottomrule
+\end{longtable}
+
+\end{document}

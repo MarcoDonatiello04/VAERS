@@ -1,0 +1,17 @@
+.DS_Store
+.idea/
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+
+# Heavy artifacts not suitable for plain GitHub push
+data/
+models/
+artifacts/
+reports/metrics/
+
+# Local build/cache files
+*.log
+*.aux
+*.out
+*.toc
